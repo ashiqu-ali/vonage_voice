@@ -1,4 +1,4 @@
-## 0.0.1
+## 1.0.0
 
 * Initial release of the Vonage Voice Flutter plugin.
 * Make and receive voice calls using the Vonage Client SDK.
