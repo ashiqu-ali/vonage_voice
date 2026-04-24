@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         PERMISSIONS
+         ══════════════════════════════════════════════════════════════════ -->
+
+    <!-- Required: capture microphone audio during calls -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- Required: integrate with Android Telecom framework -->
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+
+    <!-- Required: place calls via TelecomManager.placeCall() -->
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+
+    <!-- Required: detect phone state changes and call handles -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+
+    <!-- Required: resolve PhoneAccount handles on API 26+ -->
+    <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
+
+    <!-- Required: run TVConnectionService as a foreground service -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!-- Required on API 34+: foreground service with microphone access -->
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+    <!-- Required on API 34+: foreground service handling phone calls -->
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+
+    <!-- Required: receive FCM push notifications for incoming calls -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Required: post call notifications on API 33+ -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Required: internet access for Vonage WebRTC media -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Required: check and manage network state for WebRTC -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+
+    <!-- Required: prevent CPU from sleeping during an active call -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Required: keep screen on during incoming call UI -->
+    <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
+
+    <!-- Required: show full-screen incoming call UI over lock screen -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+
+    <!-- Required: vibrate during incoming call notification -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- Required: control audio routing (earpiece, speaker, Bluetooth) -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+    <!-- Required on API 31+: connect to Bluetooth audio devices during calls -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- Required on API ≤30: access Bluetooth adapter state -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+
+    <!-- Required: show overlay UI over other apps and lock screen -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- Required: show incoming call notification on lock screen (Android 11 and below) -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
+    <!-- Required: bring activity to front via bringActivityToFront and REORDER_TO_FRONT flag -->
+    <uses-permission android:name="android.permission.REORDER_TASKS" />
+
+    <!-- Required: request battery optimization exemption so OEMs like Vivo
+         don't kill the app when backgrounded — needed for incoming call push delivery -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         APPLICATION COMPONENTS
+         All services and receivers must live inside <application>
+         ══════════════════════════════════════════════════════════════════ -->
+
+    <application>
+
+        <!-- ── IncomingCallActivity ───────────────────────────────────────
+             Full-screen native Activity for incoming call UI.
+             Launched by the notification's fullScreenIntent when the device
+             is locked / screen off. Shows over the lock screen with native
+             answer/decline buttons, ringtone, and vibration.
+
+             singleInstance + taskAffinity="" ensures it runs in its own task
+             and doesn't stack on top of the Flutter MainActivity.
+             noHistory=true so it doesn't appear in recents.
+             showOnLockScreen/showWhenLocked/turnScreenOn are manifest hints
+             that work alongside the programmatic flags in the Activity.
+        -->
+        <activity
+            android:name="com.iocod.vonage.vonage_voice.IncomingCallActivity"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:taskAffinity=""
+            android:showOnLockScreen="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:noHistory="true"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.VonageIncomingCall" />
+
+        <!-- ── AnswerCallTrampolineActivity ───────────────────────────────
+             Invisible (transparent) Activity used to answer calls from the
+             notification's "Answer" button. On Android 12+ (API 31),
+             background activity start restrictions prevent launching
+             MainActivity from a service/receiver. This trampoline is launched
+             via PendingIntent.getActivity, sends ACTION_ANSWER to the service,
+             launches MainActivity from its Activity context, then finishes.
+        -->
+        <activity
+            android:name="com.iocod.vonage.vonage_voice.AnswerCallTrampolineActivity"
+            android:exported="false"
+            android:taskAffinity=""
+            android:noHistory="true"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.VonageTransparent" />
+
+        <!-- ── TVConnectionService ────────────────────────────────────────
+             Extends Android ConnectionService to integrate calls with the
+             Telecom framework — enables native call UI, BT headsets, car kits.
+
+             android:permission ensures only the system Telecom framework
+             can bind to this service, preventing unauthorised access.
+             foregroundServiceType includes phoneCall for API 34+ compliance.
+        -->
+        <service
+            android:name="com.iocod.vonage.vonage_voice.service.TVConnectionService"
+            android:exported="true"
+            android:foregroundServiceType="microphone|phoneCall"
+            android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE">
+            <intent-filter>
+                <action android:name="android.telecom.ConnectionService" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name="com.iocod.vonage.vonage_voice.fcm.VonageFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter android:priority="10">
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <receiver
+            android:name="com.iocod.vonage.vonage_voice.receivers.TVCallActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.iocod.vonage.NOTIFICATION_ANSWER" />
+                <action android:name="com.iocod.vonage.NOTIFICATION_DECLINE" />
+            </intent-filter>
+        </receiver>
+
+        <!-- ── BootCompletedReceiver ──────────────────────────────────────
+             Initializes Firebase Messaging after device reboot so the device
+             can receive FCM push messages for incoming calls.
+             directBootAware=true ensures it also fires on LOCKED_BOOT_COMPLETED
+             (before the user unlocks). Also handles vendor-specific quickboot
+             actions (Vivo, Xiaomi, HTC).
+        -->
+        <receiver
+            android:name="com.iocod.vonage.vonage_voice.receivers.BootCompletedReceiver"
+            android:exported="true"
+            android:enabled="true"
+            android:directBootAware="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+
+</manifest>
