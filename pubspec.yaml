@@ -34,7 +34,7 @@ flutter:
   plugin:
     platforms:
       android:
-        package: com.iocod.vonage.vonage_voice
+        package: com.ashiquali.vonage_voice
         pluginClass: VonageVoicePlugin
       ios:
         pluginClass: VonageVoicePlugin

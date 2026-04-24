@@ -34,7 +34,7 @@
 -dontwarn io.opentelemetry.**
 
 # ── Plugin classes ───────────────────────────────────────────────────────
--keep class com.iocod.vonage.vonage_voice.** { *; }
+-keep class com.ashiquali.vonage_voice.** { *; }
 
 # ── Firebase Messaging ──────────────────────────────────────────────────
 -keep class com.google.firebase.messaging.** { *; }

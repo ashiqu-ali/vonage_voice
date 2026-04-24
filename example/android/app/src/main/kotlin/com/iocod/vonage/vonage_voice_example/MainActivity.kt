@@ -1,4 +1,4 @@
-package com.iocod.vonage.vonage_voice_example
+package com.ashiquali.vonage_voice_example
 
 import android.os.Build
 import android.os.Bundle

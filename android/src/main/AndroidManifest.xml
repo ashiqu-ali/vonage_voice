@@ -101,7 +101,7 @@
              that work alongside the programmatic flags in the Activity.
         -->
         <activity
-            android:name="com.iocod.vonage.vonage_voice.IncomingCallActivity"
+            android:name="com.ashiquali.vonage_voice.IncomingCallActivity"
             android:exported="false"
             android:launchMode="singleInstance"
             android:taskAffinity=""
@@ -121,7 +121,7 @@
              launches MainActivity from its Activity context, then finishes.
         -->
         <activity
-            android:name="com.iocod.vonage.vonage_voice.AnswerCallTrampolineActivity"
+            android:name="com.ashiquali.vonage_voice.AnswerCallTrampolineActivity"
             android:exported="false"
             android:taskAffinity=""
             android:noHistory="true"
@@ -137,7 +137,7 @@
              foregroundServiceType includes phoneCall for API 34+ compliance.
         -->
         <service
-            android:name="com.iocod.vonage.vonage_voice.service.TVConnectionService"
+            android:name="com.ashiquali.vonage_voice.service.TVConnectionService"
             android:exported="true"
             android:foregroundServiceType="microphone|phoneCall"
             android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE">
@@ -147,7 +147,7 @@
         </service>
 
         <service
-            android:name="com.iocod.vonage.vonage_voice.fcm.VonageFirebaseMessagingService"
+            android:name="com.ashiquali.vonage_voice.fcm.VonageFirebaseMessagingService"
             android:exported="false">
             <intent-filter android:priority="10">
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
@@ -155,11 +155,11 @@
         </service>
 
         <receiver
-            android:name="com.iocod.vonage.vonage_voice.receivers.TVCallActionReceiver"
+            android:name="com.ashiquali.vonage_voice.receivers.TVCallActionReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.iocod.vonage.NOTIFICATION_ANSWER" />
-                <action android:name="com.iocod.vonage.NOTIFICATION_DECLINE" />
+                <action android:name="com.ashiquali.vonage_voice.NOTIFICATION_ANSWER" />
+                <action android:name="com.ashiquali.vonage_voice.NOTIFICATION_DECLINE" />
             </intent-filter>
         </receiver>
 
@@ -171,7 +171,7 @@
              actions (Vivo, Xiaomi, HTC).
         -->
         <receiver
-            android:name="com.iocod.vonage.vonage_voice.receivers.BootCompletedReceiver"
+            android:name="com.ashiquali.vonage_voice.receivers.BootCompletedReceiver"
             android:exported="true"
             android:enabled="true"
             android:directBootAware="true">

@@ -7,7 +7,7 @@ plugins {
 }
 
 android {
-    namespace = "com.iocod.vonage.vonage_voice_example"
+    namespace = "com.ashiquali.vonage_voice_example"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -22,7 +22,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.iocod.vonage.vonage_voice_example"
+        applicationId = "com.ashiquali.vonage_voice_example"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
