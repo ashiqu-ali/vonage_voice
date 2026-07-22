@@ -9,3 +9,5 @@
 * Audio device management — switch between earpiece, speaker, and Bluetooth during calls.
 * Full permission management helpers for Android (microphone, phone state, notifications, battery optimization, full-screen intent).
 * Token refresh and session management.
+* iOS supports both CocoaPods and Swift Package Manager integration.
+* iOS minimum deployment target is iOS 15.0 (required by the Vonage Client SDK 2.x).

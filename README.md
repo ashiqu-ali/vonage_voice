@@ -188,9 +188,58 @@ Future<void> prepareAndroidOnboarding() async {
 <string>Microphone access is required for voice calls.</string>
 ```
 
-**3. Minimum deployment target:** iOS 13.0 (enforced by the podspec).
+**3. Minimum deployment target:** **iOS 15.0**.
 
-The plugin depends on `VonageClientSDKVoice ~> 1.7.2`, `CallKit`, `PushKit`, and `AVFoundation` — all pulled in automatically via CocoaPods.
+> **iOS 15 is required by the Vonage Client SDK.** The Vonage Voice SDK 2.x
+> (Swift Package and CocoaPod) declares an iOS 15 minimum, so this plugin
+> targets iOS 15.0 on both integration paths. iOS 13/14 are no longer supported.
+
+The plugin depends on `VonageClientSDKVoice ~> 2.3`, `CallKit`, `PushKit`, and
+`AVFoundation` — all pulled in automatically by whichever integration path you use.
+
+**4. Choose an integration path — CocoaPods or Swift Package Manager.**
+
+The plugin supports **both**; pick whichever your app uses. You do not need to
+change any Dart or Swift code — the choice only affects how the native
+dependency is resolved.
+
+<details open>
+<summary><strong>CocoaPods</strong> (default)</summary>
+
+No extra steps. `flutter build ios` / `flutter run` resolves the plugin and the
+Vonage SDK through your app's `Podfile` automatically. Ensure your app's
+`Podfile` targets iOS 15:
+
+```ruby
+# ios/Podfile
+platform :ios, '15.0'
+```
+</details>
+
+<details>
+<summary><strong>Swift Package Manager</strong></summary>
+
+Enable Flutter's SPM integration once, then build as usual:
+
+```bash
+flutter config --enable-swift-package-manager
+flutter build ios
+```
+
+Flutter resolves the plugin's `Package.swift` and pulls the official Vonage
+Swift Package (`VonageClientSDKVoice`) automatically. You can confirm it
+appears under **Package Dependencies** in Xcode's Project Navigator.
+
+To switch back to CocoaPods at any time:
+
+```bash
+flutter config --no-enable-swift-package-manager
+```
+</details>
+
+> **Migration note for existing users:** nothing changes unless you opt into
+> SPM — CocoaPods remains fully supported. The only behavioral change is the
+> iOS 15 minimum, which comes from the Vonage SDK, not from SPM.
 
 ---
 
@@ -355,6 +404,40 @@ await VonageVoice.instance.unregister();
 | `deviceLimitExceeded` | Registration failed — max devices limit reached |
 | `permission` | A runtime permission result received |
 | `audioRouteChanged` | Audio route changed (iOS only) |
+
+---
+
+## 🧯 Troubleshooting (iOS)
+
+**"CocoaPods could not find compatible versions for VonageClientSDKVoice"**
+Your app's `Podfile.lock` is pinned to an older SDK. Run
+`pod update VonageClientSDKVoice` (or `pod install --repo-update`) in
+`ios/`.
+
+**SPM: `Package Dependencies` doesn't appear / plugin not found**
+Make sure SPM is enabled (`flutter config --enable-swift-package-manager`),
+then `flutter clean && flutter pub get && flutter build ios`.
+
+**Deployment target errors (`iOS 13`/`iOS 14`)**
+The Vonage 2.x SDK requires iOS 15. Set `platform :ios, '15.0'` in your
+`Podfile` and raise the Runner target to iOS 15 in Xcode.
+
+**Switching between CocoaPods and SPM**
+Toggle with `flutter config --enable-swift-package-manager` /
+`--no-enable-swift-package-manager`, then `flutter clean` before rebuilding.
+Only one path is active per build — there is no duplicate-symbol risk.
+
+## ❓ FAQ
+
+**Do I have to migrate to Swift Package Manager?**
+No. CocoaPods is fully supported and remains the default. SPM is additive.
+
+**Will enabling SPM change plugin behavior?**
+No. Both paths resolve the same Vonage SDK generation and register the same
+plugin class — the choice only affects dependency resolution.
+
+**Known limitation:** iOS 13 and 14 are no longer supported (Vonage 2.x SDK
+requirement).
 
 ---
 
