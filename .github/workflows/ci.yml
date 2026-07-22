@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Dart / Flutter package checks (platform-agnostic) ──────────────────────
+  analyze:
+    name: Analyze & test (Dart)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+  # ── iOS via CocoaPods (existing integration path) ─────────────────────────
+  ios-cocoapods:
+    name: iOS build (CocoaPods) · Xcode ${{ matrix.xcode }}
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        # Cover Xcode 15 and 16 to guard both toolchains.
+        xcode: ['15.4', '16.2']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ matrix.xcode }}
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Ensure SPM is OFF for the CocoaPods path
+        run: flutter config --no-enable-swift-package-manager
+      - name: Lint podspec
+        run: pod lib lint ios/vonage_voice.podspec --allow-warnings
+      - run: flutter pub get
+      - name: Build example (CocoaPods, no codesign)
+        working-directory: example
+        run: flutter build ios --no-codesign
+
+  # ── iOS via Swift Package Manager (new integration path) ──────────────────
+  ios-spm:
+    name: iOS build (SPM) · Xcode ${{ matrix.xcode }}
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        xcode: ['15.4', '16.2']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ matrix.xcode }}
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Enable Swift Package Manager
+        run: flutter config --enable-swift-package-manager
+      - run: flutter pub get
+      - name: Build example (SPM, no codesign)
+        working-directory: example
+        run: flutter build ios --no-codesign
