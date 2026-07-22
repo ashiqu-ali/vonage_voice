@@ -100,8 +100,8 @@ class _CallStatusWidgetState extends State<CallStatusWidget> {
                 widget.bluetoothOn
                     ? Icons.bluetooth_audio
                     : widget.speakerOn
-                        ? Icons.volume_up
-                        : Icons.hearing,
+                    ? Icons.volume_up
+                    : Icons.hearing,
                 color: Colors.white38,
                 size: 14,
               ),
@@ -110,8 +110,8 @@ class _CallStatusWidgetState extends State<CallStatusWidget> {
                 widget.bluetoothOn
                     ? 'Bluetooth'
                     : widget.speakerOn
-                        ? 'Speaker'
-                        : 'Earpiece',
+                    ? 'Speaker'
+                    : 'Earpiece',
                 style: const TextStyle(color: Colors.white38, fontSize: 12),
               ),
             ],

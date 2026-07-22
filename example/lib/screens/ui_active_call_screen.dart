@@ -176,8 +176,11 @@ class _ActiveCallScreenState extends State<ActiveCallScreen> {
                       padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
                       child: Row(
                         children: [
-                          const Icon(Icons.speaker_group,
-                              color: Colors.white70, size: 22),
+                          const Icon(
+                            Icons.speaker_group,
+                            color: Colors.white70,
+                            size: 22,
+                          ),
                           const SizedBox(width: 10),
                           const Expanded(
                             child: Text(
@@ -190,8 +193,11 @@ class _ActiveCallScreenState extends State<ActiveCallScreen> {
                             ),
                           ),
                           IconButton(
-                            icon: const Icon(Icons.refresh,
-                                color: Colors.white54, size: 20),
+                            icon: const Icon(
+                              Icons.refresh,
+                              color: Colors.white54,
+                              size: 20,
+                            ),
                             onPressed: () async {
                               await _refreshAudioDevices();
                               setSheetState(() {});
@@ -204,8 +210,10 @@ class _ActiveCallScreenState extends State<ActiveCallScreen> {
                     if (_audioDevices.isEmpty)
                       const Padding(
                         padding: EdgeInsets.symmetric(vertical: 32),
-                        child: Text('No audio devices found',
-                            style: TextStyle(color: Colors.white38)),
+                        child: Text(
+                          'No audio devices found',
+                          style: TextStyle(color: Colors.white38),
+                        ),
                       )
                     else
                       ListView.builder(
@@ -237,12 +245,10 @@ class _ActiveCallScreenState extends State<ActiveCallScreen> {
   String _getInitials(String name) {
     if (name.isEmpty) return '?';
     if (name.startsWith('+') ||
-        name.codeUnits.every((c) =>
-            (c >= 48 && c <= 57) ||
-            c == 32 ||
-            c == 45 ||
-            c == 40 ||
-            c == 41)) {
+        name.codeUnits.every(
+          (c) =>
+              (c >= 48 && c <= 57) || c == 32 || c == 45 || c == 40 || c == 41,
+        )) {
       return '#';
     }
     final parts = name.trim().split(RegExp(r'\s+'));
@@ -265,13 +271,13 @@ class _ActiveCallScreenState extends State<ActiveCallScreen> {
         widget.activeCall.callDirection == CallDirection.outgoing;
     final contact = isOutgoing
         ? (widget.activeCall.toFormatted.isNotEmpty
-            ? widget.activeCall.toFormatted
-            : widget.activeCall.to)
+              ? widget.activeCall.toFormatted
+              : widget.activeCall.to)
         : (widget.activeCall.fromFormatted.isNotEmpty
-            ? widget.activeCall.fromFormatted
-            : widget.activeCall.from.isNotEmpty
-                ? widget.activeCall.from
-                : widget.activeCall.to);
+              ? widget.activeCall.fromFormatted
+              : widget.activeCall.from.isNotEmpty
+              ? widget.activeCall.from
+              : widget.activeCall.to);
 
     return Scaffold(
       backgroundColor: const Color(0xFF1B1B2F),

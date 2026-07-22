@@ -32,7 +32,9 @@ class CallSessionManager {
 
   /// Generic update — applies [updater] to the session with [callSid].
   void updateSession(
-      String callSid, CallSession Function(CallSession) updater) {
+    String callSid,
+    CallSession Function(CallSession) updater,
+  ) {
     final index = _sessions.indexWhere((s) => s.callSid == callSid);
     if (index == -1) return;
     _sessions[index] = updater(_sessions[index]);

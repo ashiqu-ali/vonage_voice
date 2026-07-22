@@ -92,8 +92,10 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
   String _getInitials(String name) {
     if (name.isEmpty) return '?';
     if (name.startsWith('+') ||
-        name.codeUnits.every((c) =>
-            (c >= 48 && c <= 57) || c == 32 || c == 45 || c == 40 || c == 41)) {
+        name.codeUnits.every(
+          (c) =>
+              (c >= 48 && c <= 57) || c == 32 || c == 45 || c == 40 || c == 41,
+        )) {
       return '#';
     }
     final parts = name.trim().split(RegExp(r'\s+'));
@@ -228,18 +230,12 @@ class _CallActionButton extends StatelessWidget {
           child: Container(
             width: 70,
             height: 70,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: color,
-            ),
+            decoration: BoxDecoration(shape: BoxShape.circle, color: color),
             child: Icon(icon, color: Colors.white, size: 30),
           ),
         ),
         const SizedBox(height: 8),
-        Text(
-          label,
-          style: const TextStyle(color: Colors.white, fontSize: 14),
-        ),
+        Text(label, style: const TextStyle(color: Colors.white, fontSize: 14)),
       ],
     );
   }
