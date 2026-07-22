@@ -310,6 +310,52 @@ class TVConnectionService : android.telecom.ConnectionService() {
                 android.util.Log.w("TVConnectionService", "clearAnsweredCallData failed: ${e.message}")
             }
         }
+
+        /**
+         * Expire any pending invites older than [PENDING_INVITE_TIMEOUT_MS].
+         * Called from VonageFirebaseMessagingService before the active-call guard
+         * so a stuck invite never permanently blocks future incoming calls.
+         *
+         * Two-phase teardown:
+         * 1. Remove stale entries from the maps immediately so the guard check that
+         *    follows this call sees clean state right away.
+         * 2. Send ACTION_CANCEL_CALL_INVITE for each stale ID so the service also
+         *    tears down ringtone, wake lock, notification, pending-call prefs, and
+         *    the foreground service — the same path as a normal cancel/hangup.
+         *    handleCancelCallInvite() handles a null invite gracefully
+         *    (invite?.cancel()) so removing from the map first is safe.
+         */
+        fun clearStaleInvitesIfAny(context: android.content.Context) {
+            val now = System.currentTimeMillis()
+            val staleIds = pendingInviteTimestamps.filter { (_, timestamp) ->
+                now - timestamp > PENDING_INVITE_TIMEOUT_MS
+            }.keys.toList()
+            for (staleId in staleIds) {
+                android.util.Log.w("TVConnectionService",
+                    "[FCM-GUARD] Clearing stale invite before guard: callId=$staleId")
+                // Phase 1 — remove from maps so the active-call guard passes immediately
+                pendingInvites.remove(staleId)
+                pendingInviteTimestamps.remove(staleId)
+                // Phase 2 — route through service for full teardown (ringtone, wake lock,
+                // notification, SharedPreferences, foreground service stop)
+                try {
+                    val cancelIntent = android.content.Intent(
+                        context, TVConnectionService::class.java
+                    ).apply {
+                        action = _root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.ACTION_CANCEL_CALL_INVITE
+                        putExtra(_root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.EXTRA_CALL_ID, staleId)
+                    }
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        context.startForegroundService(cancelIntent)
+                    } else {
+                        context.startService(cancelIntent)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("TVConnectionService",
+                        "[FCM-GUARD] Failed to send cancel intent for stale invite $staleId: ${e.message}")
+                }
+            }
+        }
     }
 
     /**

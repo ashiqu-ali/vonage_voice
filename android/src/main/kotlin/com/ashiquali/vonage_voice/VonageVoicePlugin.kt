@@ -2180,9 +2180,28 @@ class VonageVoicePlugin :
                 }
                 LocalBroadcastManager.getInstance(ctx).sendBroadcast(broadcastIntent)
             } else if (pendingInvite != null) {
-                // "Answered elsewhere" — SDK fires hangup instead of invite-cancel
-                pendingInvite.cancel()
-                TVConnectionService.pendingInvites.remove(callId)
+                // "Answered elsewhere" — SDK fires hangup instead of invite-cancel.
+                // Delegate to TVConnectionService via ACTION_CANCEL_CALL_INVITE so the
+                // full teardown runs: ringtone, wake lock, notification, pending-call
+                // prefs, and the exception-guarded cancel() with fallback broadcast.
+                // This mirrors how setCallInviteCancelListener is handled.
+                android.util.Log.i("VonagePlugin",
+                    "setOnCallHangupListener: pending invite found (answered elsewhere) — delegating to service for full teardown")
+                val cancelIntent = Intent(ctx, TVConnectionService::class.java).apply {
+                    action = Constants.ACTION_CANCEL_CALL_INVITE
+                    putExtra(Constants.EXTRA_CALL_ID, callId)
+                }
+                ContextCompat.startForegroundService(ctx, cancelIntent)
+            } else {
+                // Fallback: connection was already removed by a concurrent cleanup path
+                // (race between local handleHangup() and SDK callback). Still broadcast
+                // CALL_ENDED so Flutter is guaranteed to exit the call screen.
+                android.util.Log.w("VonagePlugin",
+                    "setOnCallHangupListener: no connection/invite found for callId=$callId — emitting fallback CALL_ENDED (race/double-cleanup)")
+                val fallbackBroadcast = Intent(Constants.BROADCAST_CALL_ENDED).apply {
+                    putExtra(Constants.EXTRA_CALL_ID, callId)
+                }
+                LocalBroadcastManager.getInstance(ctx).sendBroadcast(fallbackBroadcast)
             }
 
             // Clear pending answered call data so MainActivity.onResume() does
