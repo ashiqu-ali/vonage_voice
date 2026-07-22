@@ -13,7 +13,7 @@ Plugin for vonage voice
   s.license          = { :file => '../LICENSE' }
   s.author           = { 'Your Company' => 'email@example.com' }
   s.source           = { :path => '.' }
-  s.source_files = 'Classes/**/*'
+  s.source_files = 'vonage_voice/Sources/vonage_voice/**/*.swift'
   s.static_framework = true
   s.dependency 'Flutter'
   s.dependency 'VonageClientSDKVoice', '~> 2.3'
@@ -24,5 +24,5 @@ Plugin for vonage voice
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES', 'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386' }
   s.swift_version = '5.0'
 
-  s.resource_bundles = {'vonage_voice_privacy' => ['Resources/PrivacyInfo.xcprivacy']}
+  s.resource_bundles = {'vonage_voice_privacy' => ['vonage_voice/Sources/vonage_voice/PrivacyInfo.xcprivacy']}
 end
