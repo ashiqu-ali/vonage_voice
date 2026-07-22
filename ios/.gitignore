@@ -3,6 +3,11 @@
 .sconsign.dblite
 .svn/
 
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
 .DS_Store
 *.swp
 profile
