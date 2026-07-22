@@ -50,13 +50,7 @@ class VonageFirebaseMessagingService : FirebaseMessagingService() {
 
     private lateinit var broadcastManager: LocalBroadcastManager
 
-    /**
-     * Ensure broadcastManager is initialised. When this service is
-     * instantiated directly by FCM, onCreate() runs and sets the field.
-     * However, when EasifyFirebaseMessagingService delegates via
-     * reflection, onCreate() is NEVER called — so we lazily init here
-     * to avoid UninitializedPropertyAccessException on error paths.
-     */
+   
     private fun ensureBroadcastManager() {
         if (!::broadcastManager.isInitialized) {
             broadcastManager = LocalBroadcastManager.getInstance(applicationContext)

@@ -1877,10 +1877,7 @@ class TVConnectionService : android.telecom.ConnectionService() {
             .build()
     }
 
-    /**
-     * Creates a circular avatar bitmap with gradient background and caller initials.
-     * Matches the Twilio Easify metallic 3D look for notifications and CallStyle.
-     */
+  
     private fun createCallerAvatarBitmap(callerName: String, sizeDp: Int): Bitmap {
         val density = resources.displayMetrics.density
         val sizePx = (sizeDp * density).toInt()
