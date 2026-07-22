@@ -193,7 +193,13 @@ enum class VNMethodChannels(val methodName: String) {
      * Mirrors Twilio's `getActiveCallOnResumeFromTerminatedState`.
      * Returns true if native has an active call.
      */
-    GET_ACTIVE_CALL_ON_RESUME("getActiveCallOnResumeFromTerminatedState");
+    GET_ACTIVE_CALL_ON_RESUME("getActiveCallOnResumeFromTerminatedState"),
+
+    /**
+     * Returns the Vonage device ID stored natively after registration
+     * (registerDevicePushToken) succeeds, or null if not yet available.
+     */
+    GET_DEVICE_ID("getDeviceId");
 
     companion object {
         /**

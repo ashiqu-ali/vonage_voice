@@ -538,6 +538,12 @@ class VonageVoicePlugin :
                 result.success(TVConnectionService.hasActiveCall())
             }
 
+            // ── Device ID ─────────────────────────────────────────────────
+            VNMethodChannels.GET_DEVICE_ID -> {
+                val id = context?.let { VonageClientHolder.getStoredDeviceId(it) }
+                result.success(id)
+            }
+
             // ── Caller identity registry ──────────────────────────────────
             VNMethodChannels.REGISTER_CLIENT -> handleRegisterClient(call, result)
             VNMethodChannels.UNREGISTER_CLIENT -> handleUnregisterClient(call, result)
