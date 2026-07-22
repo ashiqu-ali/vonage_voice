@@ -78,6 +78,10 @@ class TVConnectionService : android.telecom.ConnectionService() {
     private var audioFocusRequest: AudioFocusRequest? = null
     private var audioDeviceCallback: AudioDeviceCallback? = null
     private var scoReceiver: BroadcastReceiver? = null
+    // Receives ACTION_SCREEN_OFF / ACTION_SCREEN_ON / ACTION_USER_PRESENT to re-apply
+    // audio mode on OEMs (OPPO ColorOS, Vivo FuntouchOS) where AUDIOFOCUS_GAIN doesn't
+    // reliably fire after screen-on and MODE_IN_COMMUNICATION gets reset while locked.
+    private var screenOnReceiver: BroadcastReceiver? = null
     private var incomingCallWakeLock: PowerManager.WakeLock? = null
 
     // Guards against firing fullScreenIntent multiple times for the same call.
@@ -116,6 +120,46 @@ class TVConnectionService : android.telecom.ConnectionService() {
                         android.util.Log.d("TVConnectionService",
                             "[AUDIO-FOCUS] Restoring unmuted state after focus gain")
                     }
+                }
+                // Re-apply audio mode in case OEM reset it during screen lock/unlock.
+                // MIUI / Redmi / Poco / Vivo: AUDIOFOCUS_GAIN fires on screen unlock.
+                // Without this, MODE_IN_COMMUNICATION stays reset → bidirectional silence.
+                if (activeConnections.isNotEmpty()) {
+                    val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                    val modeBefore = am.mode
+                    // Preserve mic mute state before changing audio mode —
+                    // some OEMs reset isMicrophoneMute when AudioManager.mode is set.
+                    val muteBeforeRecovery = am.isMicrophoneMute
+                    // Preserve speaker state before changing audio mode.
+                    val speakerBeforeRecovery = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        am.communicationDevice?.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+                    } else {
+                        @Suppress("DEPRECATION")
+                        am.isSpeakerphoneOn
+                    }
+                    am.mode = AudioManager.MODE_IN_COMMUNICATION
+                    // Restore mic mute to what it was before mode change
+                    am.isMicrophoneMute = muteBeforeRecovery
+                    // Restore speaker routing to what it was before mode change
+                    if (speakerBeforeRecovery) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            val spkDev = am.availableCommunicationDevices
+                                .firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                            if (spkDev != null) am.setCommunicationDevice(spkDev)
+                            else {
+                                @Suppress("DEPRECATION")
+                                am.isSpeakerphoneOn = true
+                            }
+                        } else {
+                            @Suppress("DEPRECATION")
+                            am.isSpeakerphoneOn = true
+                        }
+                    }
+                    val modeAfter = am.mode
+                    android.util.Log.d("TVConnectionService",
+                        "[AUDIO-FOCUS] GAIN — re-applied MODE_IN_COMMUNICATION: " +
+                        "before=$modeBefore after=$modeAfter stuck=${modeAfter == AudioManager.MODE_IN_COMMUNICATION} | " +
+                        "micMute=${am.isMicrophoneMute} speaker=$speakerBeforeRecovery")
                 }
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
@@ -380,13 +424,20 @@ class TVConnectionService : android.telecom.ConnectionService() {
         createNotificationChannel()
         createIncomingCallNotificationChannel()
 
+        // ACTION_ANSWER is treated differently: we are transitioning from incoming
+        // to active, so we must NOT rebuild the incoming call notification.
+        // On OPPO ColorOS (and other OEMs), calling startForeground() with a
+        // CallStyle.forIncomingCall() notification while processing ACTION_ANSWER
+        // re-triggers the system call overlay right before doAnswer() updates it,
+        // causing the "Incoming Call" overlay to persist even after Connected.
+        val isAnswerAction = intentAction == _root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.ACTION_ANSWER
         val isIncomingAction = intentAction == _root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.ACTION_INCOMING_CALL
                 || intentAction == _root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.ACTION_ANSWER
 
-        val notification = if (pendingInvites.isNotEmpty()) {
+        val notification = if (!isAnswerAction && pendingInvites.isNotEmpty()) {
             val entry = pendingInvites.entries.first()
             buildIncomingCallNotification(entry.key, entry.value.from)
-        } else if (isIncomingAction && !callId.isNullOrEmpty()) {
+        } else if (!isAnswerAction && isIncomingAction && !callId.isNullOrEmpty()) {
             // Real incoming call with known callId — build full notification
             // with the real callId in fullScreenIntent. This prevents the
             // activity from launching in placeholder mode on locked screens
@@ -394,7 +445,7 @@ class TVConnectionService : android.telecom.ConnectionService() {
             android.util.Log.d("TVConnectionService",
                 "[ensureForeground] Using real notification: callId=$callId, from=$callerFrom")
             buildIncomingCallNotification(callId, callerFrom ?: "Incoming Call")
-        } else if (isIncomingAction) {
+        } else if (!isAnswerAction && isIncomingAction) {
             // No callId yet (placeholder path from killed-app FCM) — use
             // placeholder notification WITH fullScreenIntent so the incoming
             // call screen appears immediately on lock screen.
@@ -405,9 +456,14 @@ class TVConnectionService : android.telecom.ConnectionService() {
             buildActiveCallNotification()
         }
 
-        // For incoming calls, use PHONE_CALL type (doesn't require RECORD_AUDIO).
-        // For active calls, use MICROPHONE type (already have permission by then).
-        val serviceType = if (isIncomingAction || pendingInvites.isNotEmpty()) {
+        // For ACTION_ANSWER: use both MICROPHONE and PHONE_CALL — matches
+        // startCallForegroundService() and satisfies Vivo/OPPO AudioRecord requirement.
+        // For incoming calls: PHONE_CALL only (RECORD_AUDIO not yet needed).
+        // For active calls: MICROPHONE only.
+        val serviceType = if (isAnswerAction) {
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+        } else if (isIncomingAction || pendingInvites.isNotEmpty()) {
             android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
         } else {
             android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
@@ -427,7 +483,9 @@ class TVConnectionService : android.telecom.ConnectionService() {
         // full-screen activity (not a heads-up notification).
         // ONLY fire once — Samsung crashes or shows heads-up (not full-screen)
         // when the same fullScreenIntent PendingIntent fires multiple times.
-        if ((isIncomingAction || pendingInvites.isNotEmpty()) && !incomingNotificationPosted) {
+        // Skip for ACTION_ANSWER — the answer path must not re-post the incoming
+        // call notification (it would re-trigger the OPPO/ColorOS system overlay).
+        if (!isAnswerAction && (isIncomingAction || pendingInvites.isNotEmpty()) && !incomingNotificationPosted) {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.notify(_root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.NOTIFICATION_ID, notification)
             incomingNotificationPosted = true
@@ -437,7 +495,7 @@ class TVConnectionService : android.telecom.ConnectionService() {
 
         // Acquire FULL_WAKE_LOCK for incoming calls to physically turn the screen on.
         // Without this, the fullScreenIntent may not fire on some devices.
-        if (isIncomingAction && incomingCallWakeLock == null) {
+        if (!isAnswerAction && isIncomingAction && incomingCallWakeLock == null) {
             acquireIncomingCallWakeLock()
         }
     }
@@ -759,7 +817,12 @@ class TVConnectionService : android.telecom.ConnectionService() {
                 )
             activeConnections[callId] = connection
             connection.setCallActive()
-            requestAudioFocus() 
+            requestAudioFocus()
+            // Oppo ColorOS (and Realme) reset AudioManager.mode to MODE_NORMAL
+            // when the screen locks, even during an active outgoing call.
+            // The screen receiver re-applies MODE_IN_COMMUNICATION on screen-off/on
+            // so the WebRTC mic capture path is never silenced.
+            registerScreenOnReceiver("OUTGOING")
 
             startCallForegroundService()
 
@@ -783,10 +846,15 @@ class TVConnectionService : android.telecom.ConnectionService() {
      *   EXTRA_CALL_ID — callId of the invite to answer
      */
 
-     private fun requestAudioFocus() {
+     private fun requestAudioFocus(preserveMute: Boolean = false, preserveSpeaker: Boolean = false) {
                 val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 lastAudioFocusRequestTime = SystemClock.elapsedRealtime()
                 cancelPendingAudioFocusRestore()
+                val modeBefore = audioManager.mode
+                val muteBefore = audioManager.isMicrophoneMute
+                android.util.Log.d("TVConnectionService",
+                    "[REQ-AUDIO-FOCUS] called | modeBefore=$modeBefore | micMute=$muteBefore | " +
+                    "sdkInt=${Build.VERSION.SDK_INT} | activeConns=${activeConnections.size}")
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
@@ -816,50 +884,86 @@ class TVConnectionService : android.telecom.ConnectionService() {
 
                 // Set audio mode to voice call — critical for microphone to work
                 audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-                audioManager.isSpeakerphoneOn = false
-                audioManager.isMicrophoneMute = false
-
-                // Broadcast speaker=off and mute=off so Flutter UI starts in the correct state
-                val speakerOffBroadcast = Intent(_root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.BROADCAST_SPEAKER_STATE).apply {
-                    putExtra("state", false)
+                // preserveSpeaker: when recovering from screen lock, preserve the user's
+                // intentional speaker state. Only reset speaker for new calls (default false).
+                if (!preserveSpeaker) {
+                    @Suppress("DEPRECATION")
+                    audioManager.isSpeakerphoneOn = false
                 }
-                broadcastManager.sendBroadcast(speakerOffBroadcast)
-
-                val muteOffBroadcast = Intent(_root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.BROADCAST_MUTE_STATE).apply {
-                    putExtra("state", false)
+                // preserveMute is read by callers BEFORE any OS-level resets can occur.
+                // We use it here rather than re-reading am.isMicrophoneMute (which may
+                // have already been reset by the OS between the caller's read and now).
+                if (!preserveMute) {
+                    audioManager.isMicrophoneMute = false
                 }
-                broadcastManager.sendBroadcast(muteOffBroadcast)
+                val modeAfter = audioManager.mode
+                android.util.Log.d("TVConnectionService",
+                    "[REQ-AUDIO-FOCUS] mode set: before=$modeBefore after=$modeAfter " +
+                    "stuck=${modeAfter == AudioManager.MODE_IN_COMMUNICATION} | " +
+                    "micMute=${audioManager.isMicrophoneMute} preserveMute=$preserveMute preserveSpeaker=$preserveSpeaker")
+
+                // Broadcast speaker state: preserve on recovery, off for new calls.
+                // Broadcast the caller-supplied mute state (not always false) to preserve
+                // the user's intentional mute across audio focus recovery events.
+                val speakerBroadcast = Intent(_root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.BROADCAST_SPEAKER_STATE).apply {
+                    putExtra("state", preserveSpeaker)
+                }
+                broadcastManager.sendBroadcast(speakerBroadcast)
+
+                val muteBroadcast = Intent(_root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.BROADCAST_MUTE_STATE).apply {
+                    putExtra("state", preserveMute)
+                }
+                broadcastManager.sendBroadcast(muteBroadcast)
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    // API 31+ — prefer Bluetooth if connected, otherwise earpiece
                     val devices = audioManager.availableCommunicationDevices
-                    val bluetoothDevice = devices.firstOrNull {
-                        it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
-                        it.type == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET
-                    }
-                    val targetDevice = bluetoothDevice
-                        ?: devices.firstOrNull {
-                            it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+                    if (preserveSpeaker) {
+                        // Recovery path: route back to speaker
+                        val speakerDevice = devices.firstOrNull {
+                            it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
                         }
-                    targetDevice?.let { audioManager.setCommunicationDevice(it) }
+                        if (speakerDevice != null) {
+                            audioManager.setCommunicationDevice(speakerDevice)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            audioManager.isSpeakerphoneOn = true
+                        }
+                    } else {
+                        // New call or non-speaker recovery: prefer BT if connected, otherwise earpiece
+                        val bluetoothDevice = devices.firstOrNull {
+                            it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                            it.type == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET
+                        }
+                        val targetDevice = bluetoothDevice
+                            ?: devices.firstOrNull {
+                                it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+                            }
+                        targetDevice?.let { audioManager.setCommunicationDevice(it) }
 
-                    // Broadcast BT state so Flutter UI updates immediately
-                    if (bluetoothDevice != null) {
-                        val btBroadcast = Intent(_root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.BROADCAST_BLUETOOTH_STATE).apply {
-                            putExtra("state", true)
+                        // Broadcast BT state so Flutter UI updates immediately
+                        if (bluetoothDevice != null) {
+                            val btBroadcast = Intent(_root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.BROADCAST_BLUETOOTH_STATE).apply {
+                                putExtra("state", true)
+                            }
+                            broadcastManager.sendBroadcast(btBroadcast)
                         }
-                        broadcastManager.sendBroadcast(btBroadcast)
                     }
                 } else {
-                    // Pre-API 31 — only route to BT if a device is actually connected
-                    val btOutputs = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-                    val hasBtDevice = btOutputs.any {
-                        it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
-                    }
-                    if (hasBtDevice && audioManager.isBluetoothScoAvailableOffCall) {
-                        audioManager.startBluetoothSco()
-                        audioManager.isBluetoothScoOn = true
-                        // Actual BT connected state is confirmed via SCO state listener
+                    if (preserveSpeaker) {
+                        // Recovery path: re-apply speaker (pre-API 31)
+                        @Suppress("DEPRECATION")
+                        audioManager.isSpeakerphoneOn = true
+                    } else {
+                        // Pre-API 31 — only route to BT if a device is actually connected
+                        val btOutputs = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+                        val hasBtDevice = btOutputs.any {
+                            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+                        }
+                        if (hasBtDevice && audioManager.isBluetoothScoAvailableOffCall) {
+                            audioManager.startBluetoothSco()
+                            audioManager.isBluetoothScoOn = true
+                            // Actual BT connected state is confirmed via SCO state listener
+                        }
                     }
                 }
 
@@ -872,7 +976,18 @@ class TVConnectionService : android.telecom.ConnectionService() {
             if (activeConnections.isNotEmpty()) {
                 android.util.Log.d("TVConnectionService",
                     "[AUDIO-FOCUS] Restoring audio focus after transient loss")
-                requestAudioFocus()
+                // Preserve mute and speaker state across transient audio focus loss/gain cycle.
+                val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                val muteState = am.isMicrophoneMute ||
+                    (activeConnections.values.firstOrNull()?.isMuted == true)
+                val hwSpeaker = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    am.communicationDevice?.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+                } else {
+                    @Suppress("DEPRECATION")
+                    am.isSpeakerphoneOn
+                }
+                val speakerState = hwSpeaker || (activeConnections.values.firstOrNull()?.isSpeakerOn == true)
+                requestAudioFocus(preserveMute = muteState, preserveSpeaker = speakerState)
             }
         }
         restoreAudioFocusHandler.postDelayed(pendingAudioFocusRestore!!, AUDIO_FOCUS_RESTORE_DELAY_MS)
@@ -885,6 +1000,7 @@ class TVConnectionService : android.telecom.ConnectionService() {
 
     private fun releaseAudioFocus() {
         unregisterBluetoothMonitor()
+        unregisterScreenOnReceiver()
         cancelPendingAudioFocusRestore()
         hasAudioFocus = false
         wasAutoMutedByFocusLoss = false
@@ -1053,6 +1169,112 @@ class TVConnectionService : android.telecom.ConnectionService() {
                 type == AudioDeviceInfo.TYPE_BLE_HEADSET)
     }
 
+    // ── OEM lock-screen audio fix ─────────────────────────────────────────
+
+    /**
+     * Registers a broadcast receiver for ACTION_SCREEN_OFF / ACTION_SCREEN_ON /
+     * ACTION_USER_PRESENT.
+     *
+     * OPPO ColorOS (and some Realme devices) do not reliably fire AUDIOFOCUS_GAIN
+     * after the screen turns on during an active call. Without this, MODE_IN_COMMUNICATION
+     * stays reset (OEM set it to MODE_NORMAL while screen was off), causing:
+     *   - Local can't hear remote (earpiece not in voice mode)
+     *   - Remote can't hear local (WebRTC ADM mic capture path inactive)
+     *
+     * ACTION_USER_PRESENT fires after PIN/pattern unlock — the safest re-apply point.
+     * Guard: no-op when no active connections (e.g., between calls).
+     */
+    private fun registerScreenOnReceiver(direction: String = "UNKNOWN") {
+        if (screenOnReceiver != null) {
+            android.util.Log.d("TVConnectionService",
+                "[SCREEN-RECV] already registered — skipping (direction=$direction)")
+            return
+        }
+        android.util.Log.d("TVConnectionService",
+            "[SCREEN-RECV] registering for SCREEN_OFF/ON/USER_PRESENT (direction=$direction)")
+        screenOnReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (activeConnections.isEmpty()) {
+                    android.util.Log.d("TVConnectionService",
+                        "[SCREEN-RECV] ${intent.action} — no active connections, ignoring")
+                    return
+                }
+                val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                val modeBefore = am.mode
+                val muteBefore = am.isMicrophoneMute
+                val hasFocusBefore = hasAudioFocus
+                android.util.Log.d("TVConnectionService",
+                    "[SCREEN-RECV] action=${intent.action} | " +
+                    "modeBefore=$modeBefore (expected=${AudioManager.MODE_IN_COMMUNICATION}) | " +
+                    "micMute=$muteBefore | hasAudioFocus=$hasFocusBefore | " +
+                    "activeConnections=${activeConnections.size} | " +
+                    "sdkInt=${Build.VERSION.SDK_INT}")
+                // Read mic mute BEFORE requestAudioFocus — am.isMicrophoneMute is the
+                // hardware ground truth. conn.isMuted may not yet be set if the Vonage
+                // SDK callback hasn't fired (race: SDK sets hardware mute synchronously
+                // but TVCallConnection.setMuted runs in an async callback).
+                val muteBeforeRecovery = am.isMicrophoneMute
+                // Read speaker state BEFORE requestAudioFocus (same race-condition logic).
+                // On API 31+, check communication device type for ground truth.
+                val speakerBeforeRecovery = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    am.communicationDevice?.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+                } else {
+                    @Suppress("DEPRECATION")
+                    am.isSpeakerphoneOn
+                }
+                wasAutoMutedByFocusLoss = false
+                requestAudioFocus(preserveMute = muteBeforeRecovery, preserveSpeaker = speakerBeforeRecovery)
+                am.mode = AudioManager.MODE_IN_COMMUNICATION
+                // Re-apply hardware mute if needed — the OS may have reset
+                // am.isMicrophoneMute during the audio focus request on API 36+.
+                if (muteBeforeRecovery) {
+                    am.isMicrophoneMute = true
+                }
+                // Re-apply speaker if needed — some OEMs reset communication device
+                // during requestAudioFocus even when we explicitly set it inside.
+                if (speakerBeforeRecovery) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        val spkDev = am.availableCommunicationDevices
+                            .firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                        if (spkDev != null) am.setCommunicationDevice(spkDev)
+                        else {
+                            @Suppress("DEPRECATION")
+                            am.isSpeakerphoneOn = true
+                        }
+                    } else {
+                        @Suppress("DEPRECATION")
+                        am.isSpeakerphoneOn = true
+                    }
+                }
+                // Re-read to verify the mode actually stuck (some OEMs silently reject setMode)
+                val modeAfter = am.mode
+                val muteAfter = am.isMicrophoneMute
+                android.util.Log.d("TVConnectionService",
+                    "[SCREEN-RECV] after fix: mode=$modeAfter (stuck=${modeAfter == AudioManager.MODE_IN_COMMUNICATION}) | " +
+                    "micMute=$muteAfter | speaker=$speakerBeforeRecovery | hasAudioFocus=$hasAudioFocus")
+                if (modeAfter != AudioManager.MODE_IN_COMMUNICATION) {
+                    android.util.Log.e("TVConnectionService",
+                        "[SCREEN-RECV] *** MODE DID NOT STICK — OEM rejected setMode! " +
+                        "mode is still $modeAfter on sdk=${Build.VERSION.SDK_INT} ***")
+                }
+            }
+        }
+        registerReceiver(screenOnReceiver, IntentFilter().apply {
+            // ACTION_SCREEN_OFF: ColorOS/FuntouchOS resets MODE_IN_COMMUNICATION at
+            // screen-off time. Re-applying immediately prevents any gap in mic capture.
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_USER_PRESENT)
+        })
+    }
+
+    private fun unregisterScreenOnReceiver() {
+        screenOnReceiver?.let {
+            try { unregisterReceiver(it) } catch (_: Exception) {}
+        }
+        screenOnReceiver = null
+    }
+
     private fun handleAnswer(intent: Intent) {
         val callId = intent.getStringExtra(_root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.EXTRA_CALL_ID) ?: return
 
@@ -1162,7 +1384,14 @@ class TVConnectionService : android.telecom.ConnectionService() {
                 )
             activeConnections[callId] = connection
             connection.setCallActive()
-            requestAudioFocus() 
+            requestAudioFocus()
+            // Upgrade the foreground service type from PHONE_CALL → MICROPHONE|PHONE_CALL.
+            // ensureForeground() (called at ACTION_ANSWER) uses PHONE_CALL only.
+            // Vivo FuntouchOS and Oppo ColorOS enforce that AudioRecord is suspended
+            // during screen lock unless FOREGROUND_SERVICE_TYPE_MICROPHONE is declared.
+            // Without this upgrade, the mic silently freezes when the screen turns off.
+            startCallForegroundService()
+            registerScreenOnReceiver("INCOMING")
 
             // ── Switch notification from incoming → active call ───────────────────
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE)
@@ -1494,11 +1723,15 @@ class TVConnectionService : android.telecom.ConnectionService() {
         val notification = buildActiveCallNotification()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                _root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.NOTIFICATION_ID,
-                notification,
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            )
+            // Declare both MICROPHONE and PHONE_CALL so Vivo FuntouchOS / Oppo ColorOS
+            // cannot suspend AudioRecord during screen lock.
+            // PHONE_CALL alone is not enough — mic is frozen on screen-off.
+            // MICROPHONE alone works too but PHONE_CALL allows CallKit-style routing.
+            val serviceType = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+            android.util.Log.d("TVConnectionService",
+                "[FG-SERVICE] startForeground with MICROPHONE|PHONE_CALL (sdkInt=${Build.VERSION.SDK_INT})")
+            startForeground(_root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.NOTIFICATION_ID, notification, serviceType)
         } else {
             startForeground(_root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.NOTIFICATION_ID, notification)
         }

@@ -85,12 +85,39 @@ class TVCallConnection(
     /**
      * Called when the system audio route changes (speaker, earpiece, Bluetooth).
      * We sync our local state and broadcast to Flutter.
+     *
+     * NOTE: On MIUI and some Android 12+ devices CallAudioState.route can be stale.
+     * We validate the Bluetooth flag against the actual communication device /
+     * SCO state before trusting it to prevent phantom Bluetooth UI.
      */
     override fun onCallAudioStateChanged(state: CallAudioState) {
         isMuted = state.isMuted
 
-        val newSpeaker = state.route == CallAudioState.ROUTE_SPEAKER
-        val newBluetooth = state.route == CallAudioState.ROUTE_BLUETOOTH
+        // For speaker: always query live AudioManager rather than trusting state.route.
+        // state.route can be spuriously set to ROUTE_EARPIECE on screen lock/unlock
+        // on MIUI and some OEM firmwares, even when the speaker is physically active.
+        // This mirrors the stale isMuted issue. AudioManager is the hardware ground truth.
+        val newSpeaker = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            audioManager.communicationDevice?.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.isSpeakerphoneOn
+        }
+
+        // Guard against stale CallAudioState on MIUI / Android 12+:
+        // Only report Bluetooth active if the audio framework also confirms it.
+        val newBluetooth = if (state.route == CallAudioState.ROUTE_BLUETOOTH) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val device = audioManager.communicationDevice
+                device?.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                device?.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.isBluetoothScoOn
+            }
+        } else {
+            false
+        }
 
         if (newSpeaker != isSpeakerOn) {
             isSpeakerOn = newSpeaker
@@ -102,7 +129,8 @@ class TVCallConnection(
             broadcastStateEvent(_root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.BROADCAST_BLUETOOTH_STATE, isBluetoothOn)
         }
 
-        broadcastStateEvent(_root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.BROADCAST_MUTE_STATE, isMuted)
+        // Mute state is broadcast from setMuted() on the control path; broadcasting
+        // it again here on every route change caused redundant/racy MUTE_STATE events.
     }
 
     // ── Public control methods (called by TVConnectionService) ────────────
@@ -135,7 +163,25 @@ class TVCallConnection(
             broadcastStateEvent(_root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.BROADCAST_BLUETOOTH_STATE, false)
         }
         isSpeakerOn = speakerOn
-        audioManager.isSpeakerphoneOn = speakerOn
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // API 31+: isSpeakerphoneOn is deprecated and a no-op on some OEM
+            // firmwares — use setCommunicationDevice for reliable routing.
+            val devices = audioManager.availableCommunicationDevices
+            val targetDevice = if (speakerOn) {
+                devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+            } else {
+                devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
+            }
+            if (targetDevice != null) {
+                audioManager.setCommunicationDevice(targetDevice)
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.isSpeakerphoneOn = speakerOn
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.isSpeakerphoneOn = speakerOn
+        }
         broadcastStateEvent(_root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.BROADCAST_SPEAKER_STATE, speakerOn)
     }
 
