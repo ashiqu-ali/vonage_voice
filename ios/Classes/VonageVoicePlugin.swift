@@ -244,6 +244,33 @@ public class VonageVoicePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         NotificationCenter.default.removeObserver(self)
     }
 
+    /// Best-effort: end any active Vonage call(s) on app termination so the remote
+    /// party's call ends instead of lingering until a media timeout. Forwarded via
+    /// registrar.addApplicationDelegate(instance).
+    ///
+    /// LIMITATION: iOS does NOT reliably deliver applicationWillTerminate when the
+    /// user swipe-kills a *suspended* app; a true hard-kill can skip it, leaving the
+    /// leg to end via Vonage's server-side media timeout.
+    @objc public func applicationWillTerminate(_ application: UIApplication) {
+        guard voiceClient != nil else { return }
+        if activeCalls.isEmpty && callInvites.isEmpty { return }
+        NSLog("VonageVoice: applicationWillTerminate — hanging up \(activeCalls.count) call(s), rejecting \(callInvites.count) invite(s)")
+        for (_, callId) in activeCalls {
+            voiceClient.hangup(callId) { error in
+                if let error = error { NSLog("VonageVoice: applicationWillTerminate hangup failed: \(error.localizedDescription)") }
+            }
+        }
+        for (_, invite) in callInvites {
+            // Skip the killed-state placeholder (empty callId, real id not yet
+            // delivered) — rejecting "" no-ops/errors, mirroring the guarded
+            // decline path in provider(perform: CXEndCallAction).
+            if invite.callId.isEmpty { continue }
+            voiceClient.reject(invite.callId) { error in
+                if let error = error { NSLog("VonageVoice: applicationWillTerminate reject failed: \(error.localizedDescription)") }
+            }
+        }
+    }
+
 
     // ═════════════════════════════════════════════════════════════════
     // MARK: - Flutter Plugin Registration
@@ -1101,7 +1128,75 @@ extension VonageVoicePlugin {
         // Only send audio route events when there are active calls.
         guard !activeCalls.isEmpty else { return }
 
-        sendPhoneCallEvents(description: "AudioRoute|\(getAudioRoute())|bluetoothAvailable=\(isBluetoothAvailable())")
+        // Extract the change reason for diagnostics and proper handling.
+        let reasonValue = (notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt)
+            ?? UInt.max
+        let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue)
+
+        switch reason {
+        case .routeConfigurationChange:
+            // Reason 8: Another audio SDK or CallKit reconfigured the shared
+            // AVAudioSession's category/mode/options/route. Log full state so
+            // we can diagnose cross-SDK desynchronisation.
+            logFullAudioSessionState(label: "routeConfigurationChange(8)")
+
+            // Re-sync cached state with the ACTUAL system route.
+            // Without this, desiredSpeakerState / desiredBluetoothState can
+            // drift from reality when another party changes the session.
+            let actualSpeaker = isSpeakerOn()
+            let actualBluetooth = isBluetoothOn()
+            if actualSpeaker != desiredSpeakerState {
+                sendPhoneCallEvents(description:
+                    "LOG|routeConfigurationChange: resyncing desiredSpeakerState " +
+                    "\(desiredSpeakerState) → \(actualSpeaker)")
+                desiredSpeakerState = actualSpeaker
+            }
+            if actualBluetooth != desiredBluetoothState {
+                sendPhoneCallEvents(description:
+                    "LOG|routeConfigurationChange: resyncing desiredBluetoothState " +
+                    "\(desiredBluetoothState) → \(actualBluetooth)")
+                desiredBluetoothState = actualBluetooth
+            }
+            // Send the corrected route event to Flutter.
+            sendPhoneCallEvents(description: "AudioRoute|\(getAudioRoute())|bluetoothAvailable=\(isBluetoothAvailable())")
+
+        case .oldDeviceUnavailable:
+            sendPhoneCallEvents(description: "LOG|handleAudioRouteChange reason=oldDeviceUnavailable")
+            // A device was disconnected — update BT/speaker state.
+            desiredBluetoothState = isBluetoothOn()
+            sendPhoneCallEvents(description: "AudioRoute|\(getAudioRoute())|bluetoothAvailable=\(isBluetoothAvailable())")
+
+        case .newDeviceAvailable:
+            sendPhoneCallEvents(description: "LOG|handleAudioRouteChange reason=newDeviceAvailable")
+            sendPhoneCallEvents(description: "AudioRoute|\(getAudioRoute())|bluetoothAvailable=\(isBluetoothAvailable())")
+
+        default:
+            sendPhoneCallEvents(description: "LOG|handleAudioRouteChange reason=\(reasonValue)")
+            sendPhoneCallEvents(description: "AudioRoute|\(getAudioRoute())|bluetoothAvailable=\(isBluetoothAvailable())")
+        }
+    }
+
+    // ─── Audio Session Diagnostics ───────────────────────────────
+
+    /// Logs the complete AVAudioSession state for cross-SDK diagnostics.
+    /// Call this before/after critical audio lifecycle transitions to
+    /// verify the session is in the expected state.
+    private func logFullAudioSessionState(label: String) {
+        let session = AVAudioSession.sharedInstance()
+        let outputs = session.currentRoute.outputs.map { $0.portType.rawValue }
+        let inputs  = session.currentRoute.inputs.map  { $0.portType.rawValue }
+        let availInputs = session.availableInputs?.map { $0.portType.rawValue } ?? []
+        sendPhoneCallEvents(description:
+            "LOG|[\(label)] " +
+            "category=\(session.category.rawValue) " +
+            "mode=\(session.mode.rawValue) " +
+            "options=\(session.categoryOptions.rawValue) " +
+            "outputs=\(outputs) inputs=\(inputs) " +
+            "availableInputs=\(availInputs) " +
+            "preferredInput=\(session.preferredInput?.portType.rawValue ?? "nil") " +
+            "isOtherAudioPlaying=\(session.isOtherAudioPlaying) " +
+            "secondaryAudioHint=\(session.secondaryAudioShouldBeSilencedHint) " +
+            "desiredSpeaker=\(desiredSpeakerState) desiredBT=\(desiredBluetoothState)")
     }
 
     // ─── Audio Input Helpers ─────────────────────────────────────────
@@ -2129,7 +2224,10 @@ extension VonageVoicePlugin: PKPushRegistryDelegate {
     private func reportDummyCallAndEnd(completion: @escaping () -> Void) {
         let uuid = UUID()
         reportIncomingCall(from: "Unknown", uuid: uuid) { [weak self] _ in
-            self?.callKitProvider.reportCall(with: uuid, endedAt: Date(), reason: .failed)
+            // .answeredElsewhere (not .failed) avoids a spurious system
+            // "Missed Call" notification for a push we can't service
+            // (logged out / non-incomingCall push).
+            self?.callKitProvider.reportCall(with: uuid, endedAt: Date(), reason: .answeredElsewhere)
             completion()
         }
     }
