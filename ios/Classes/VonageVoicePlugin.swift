@@ -570,6 +570,12 @@ extension VonageVoicePlugin {
             return
         }
 
+        if pendingPushUUID != nil {
+            sendPhoneCallEvents(description: "LOG|tokens: Session restore in progress via PushKit push — skipping duplicate createSession")
+            result(true)
+            return
+        }
+
         sendPhoneCallEvents(description: "LOG|tokens: Creating session with Vonage")
 
         voiceClient.createSession(jwt) { [weak self] error, sessionId in
@@ -2015,7 +2021,15 @@ extension VonageVoicePlugin: PKPushRegistryDelegate {
         }
 
         // ── KILLED STATE: No session → restore from stored JWT ───────
-        if accessToken == nil, let storedJwt = getStoredJwt() {
+        // Guard: pendingPushUUID == nil prevents re-entering handleKilledStatePush
+        // when a second push arrives while the first killed-state restore is still
+        // in-flight. Without it, the second push would overwrite pendingPushUUID and
+        // pendingPushCompletion, breaking the first push's coordination.
+        // Note: accessToken is set synchronously inside handleKilledStatePush before
+        // createSession returns, so !isSessionReady (not accessToken == nil) is the
+        // correct readiness signal here — accessToken alone would let a mid-restore
+        // second push fall through to the foreground path.
+        if !isSessionReady, pendingPushUUID == nil, let storedJwt = getStoredJwt() {
             handleKilledStatePush(payload: payload, storedJwt: storedJwt, completion: completion)
             return
         }
@@ -2096,6 +2110,15 @@ extension VonageVoicePlugin: PKPushRegistryDelegate {
             }
             self.isSessionReady = true
             self.sendPhoneCallEvents(description: "LOG|Session restored successfully, processing push")
+            // Re-register the VoIP push token now that the session is live.
+            // handleTokens() may have been called while createSession was still
+            // in flight (pendingPushUUID != nil + isSessionReady == false), so
+            // it skipped token registration. Do it here to ensure Vonage always
+            // has a current device registration — mirrors the isSessionReady path
+            // in handleTokens().
+            if let token = self.deviceToken {
+                self.registerPushToken(token)
+            }
             self.voiceClient.processCallInvitePushData(payload.dictionaryPayload)
             // completion() is called from didReceiveInviteForCall via pendingPushCompletion.
         }
