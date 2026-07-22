@@ -94,10 +94,10 @@ buildscript {
 
 **Add `google-services.json`** — Download it from your Firebase project and place it at `android/app/google-services.json`. This enables FCM so incoming calls are delivered when the app is in the background or killed.
 
-> The plugin requires **minSdkVersion 23** or higher. Set this in `android/app/build.gradle`:
+> The plugin requires **minSdkVersion 24** or higher. Set this in `android/app/build.gradle`:
 > ```groovy
 > defaultConfig {
->     minSdkVersion 23
+>     minSdkVersion 24
 > }
 > ```
 
@@ -357,6 +357,7 @@ await VonageVoice.instance.unregister();
 | `setTokens` | `accessToken` *(required)*, `deviceToken`, `isSandbox` | `Future<bool?>` | Register Vonage JWT and push token. Must be called before any call activity. |
 | `refreshSession` | `accessToken` *(required)* | `Future<bool?>` | Refresh an expiring JWT without tearing down the session. |
 | `unregister` | — | `Future<bool?>` | Unregister push token and end the Vonage session. |
+| `getDeviceId` | — | `Future<String?>` | The Vonage device ID assigned during registration, or `null` if not yet registered. Useful for targeting a specific device from your backend. |
 | `callEventsListener` | — | `Stream<CallEvent>` | Stream of typed call state events from the native layer. |
 | `setOnDeviceTokenChanged` | `OnDeviceTokenChanged` callback | `void` | Fires when the native push token is rotated by FCM or PushKit. |
 | `showMissedCallNotifications` | `bool` (setter) | `void` | Enable/disable local missed call notifications. |
