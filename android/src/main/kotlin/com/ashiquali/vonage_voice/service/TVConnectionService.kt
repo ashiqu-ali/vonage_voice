@@ -667,9 +667,29 @@ class TVConnectionService : android.telecom.ConnectionService() {
         clearPendingCallData(this)
         incomingNotificationPosted = false
 
-        // cancel() internally broadcasts BROADCAST_CALL_INVITE_CANCELLED
-        // so we must not broadcast again to avoid duplicate Missed Call events
-        pendingInvites[callId]?.cancel()
+        // cancel() internally broadcasts BROADCAST_CALL_INVITE_CANCELLED, so on
+        // the success path we must not broadcast again (avoids duplicate Missed
+        // Call events).
+        // Wrap in try-catch: Connection.setDisconnected() can throw
+        // UnsupportedOperationException on double-cancel (rare race between
+        // setCallInviteCancelListener and setOnCallHangupListener firing together).
+        // Without this guard, the exception would skip pendingInvites.remove(),
+        // leaving the map non-empty and blocking all future calls.
+        val invite = pendingInvites[callId]
+        try {
+            invite?.cancel()
+        } catch (e: Exception) {
+            android.util.Log.e("TVConnectionService",
+                "handleCancelCallInvite: cancel() threw for callId=$callId: ${e.message}")
+            // cancel() failed before it could broadcast INVITE_CANCELLED.
+            // Broadcast manually so Flutter still gets the missed-call event.
+            if (invite != null) {
+                val fallback = Intent(_root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.BROADCAST_CALL_INVITE_CANCELLED).apply {
+                    putExtra(_root_ide_package_.com.ashiquali.vonage_voice.constants.Constants.EXTRA_CALL_ID, callId)
+                }
+                broadcastManager.sendBroadcast(fallback)
+            }
+        }
         pendingInvites.remove(callId)
         pendingInviteTimestamps.remove(callId)
 
